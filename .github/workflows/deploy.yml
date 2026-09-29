@@ -1,0 +1,53 @@
+name: deploy
+# Publishes a prebuilt Flutter web bundle to the gh-pages branch (GitHub Pages).
+# The bundle is built on the dev box by tools/deploy.sh in the app repo, which
+# serves it over a short-lived tunnel and dispatches this workflow with its
+# URL and sha256. Nothing is built here.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: URL of site.tgz
+        required: true
+      sha256:
+        description: sha256 of site.tgz
+        required: true
+      label:
+        description: build label (round / commit)
+        required: false
+        default: ''
+permissions:
+  contents: write
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch and verify bundle
+        env:
+          URL: ${{ inputs.url }}
+          SHA: ${{ inputs.sha256 }}
+        run: |
+          curl -fsSL --retry 5 --retry-all-errors --max-time 600 "$URL" -o site.tgz
+          echo "$SHA  site.tgz" | sha256sum -c -
+          mkdir site && tar -xzf site.tgz -C site
+          test -f site/index.html && test -f site/main.dart.js
+          find site -type f -size +95M -print -exec false {} +
+      - name: Check out gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: pages
+      - name: Replace contents and push
+        env:
+          LABEL: ${{ inputs.label }}
+        run: |
+          cd pages
+          git rm -rq --ignore-unmatch . >/dev/null
+          cp -a ../site/. .
+          git add -A
+          git -c user.name='deploy-bot' -c user.email='deploy-bot@users.noreply.github.com' \
+            commit -q -m "deploy: ${LABEL:-build} ($(sha256sum main.dart.js | cut -c1-12))" || echo "no changes"
+          git push -q origin HEAD:gh-pages
